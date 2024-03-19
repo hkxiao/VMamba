@@ -26,7 +26,7 @@ class IN22KDATASET(data.Dataset):
             im = Image.open(path)
         except:
             print("ERROR IMG LOADED: ", path)
-            random_img = np.random.rand(224, 224, 3) * 255
+            random_img = np.random.rand(256, 256, 3) * 255
             im = Image.fromarray(np.uint8(random_img))
         return im
 

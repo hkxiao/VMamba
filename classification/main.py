@@ -110,8 +110,8 @@ def main(config):
             logger.info(str(model))
             n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
             logger.info(f"number of params: {n_parameters}")
-            flops = model.flops()
-            logger.info(f"number of GFLOPs: {flops / 1e9}")
+#            flops = model.flops()
+         #   logger.info(f"number of GFLOPs: {flops / 1e9}")
         else:
             logger.info(flop_count_str(FlopCountAnalysis(model, (dataset_val[0][0][None],))))
 
@@ -228,6 +228,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         samples = samples.cuda(non_blocking=True)
         targets = targets.cuda(non_blocking=True)
 
+        # print(samples.shape, targets.shape)
+        # raise NameError
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
 
@@ -409,4 +411,5 @@ if __name__ == '__main__':
     logger.info(config.dump())
     logger.info(json.dumps(vars(args)))
 
+    
     main(config)

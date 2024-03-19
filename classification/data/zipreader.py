@@ -98,6 +98,6 @@ class ZipReader(object):
             im = Image.open(io.BytesIO(data))
         except:
             print("ERROR IMG LOADED: ", path_img)
-            random_img = np.random.rand(224, 224, 3) * 255
+            random_img = np.random.rand(256, 256, 3) * 255
             im = Image.fromarray(np.uint8(random_img))
         return im

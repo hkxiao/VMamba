@@ -35,3 +35,5 @@ segmentation/work_dirs
 
 selective_scan/build
 
+**/output
+imagenet1k

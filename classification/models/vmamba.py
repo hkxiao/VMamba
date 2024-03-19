@@ -14,8 +14,8 @@ from einops import rearrange, repeat
 from timm.models.layers import DropPath, trunc_normal_
 from fvcore.nn import FlopCountAnalysis, flop_count_str, flop_count, parameter_count
 DropPath.__repr__ = lambda self: f"timm.DropPath({self.drop_prob})"
-
-
+import math
+import time
 try:
     "sscore acts the same as mamba_ssm"
     SSMODE = "sscore"
@@ -250,29 +250,76 @@ def cross_selective_scan(
         else:
             nrows = 1
     
-    xs = CrossScan.apply(x)
+    hilber2d_index_list = []
+    hilber2d_index_reverse_list = []
+    for n in range(3, 7):
+        index = open('../hilbert2d_'+str(n)+'.txt', 'r').read()
+        # print(index)
+        index = index.split(' ')[:-1]
+        # print(index)
+        index = [int(x) for x in index]
+        hilber2d_index_list.append(torch.tensor(index).cuda())
+        
+        index = open('../hilbert2d_'+str(n)+'_reverse.txt', 'r').read()
+        index = index.split(' ')[:-1]
+        index = [int(x) for x in index]
+        hilber2d_index_reverse_list.append(torch.tensor(index).cuda())
+    
+    
+    # print(x.shape) #[1, 192, 56, 56]
+    # start = time.time()
+    # xs = CrossScan.apply(x) # [1, 4, 192, 3136]
+    # print("snake scan time", time.time() - start)
+    # raise NameError
+    # print(xs.shape)
+    # raise NameError
+    # hilbert flatten
+    
+    
+    # start = time.time()
+    xs = x.flatten(-2).unsqueeze(1)[:,:,:,hilber2d_index_list[int(math.ceil(math.log2(H)))-3]]
+    xs = xs.expand(B, 4 , D, H*W)
+    # print("hilbert scan time", time.time() - start)
+    # raise NameError
     
     x_dbl = torch.einsum("b k d l, k c d -> b k c l", xs, x_proj_weight)
     if x_proj_bias is not None:
         x_dbl = x_dbl + x_proj_bias.view(1, K, -1, 1)
     dts, Bs, Cs = torch.split(x_dbl, [R, N, N], dim=2)
     dts = torch.einsum("b k r l, k d r -> b k d l", dts, dt_projs_weight)
-    xs = xs.view(B, -1, L).to(torch.float)
+    #print(B, L, xs.shape)
+    
+    xs = xs.reshape(B, -1, L).to(torch.float)
     dts = dts.contiguous().view(B, -1, L).to(torch.float)
-    As = -torch.exp(A_logs.to(torch.float)) # (k * c, d_state)
-    Bs = Bs.contiguous().to(torch.float)
-    Cs = Cs.contiguous().to(torch.float)
-    Ds = Ds.to(torch.float) # (K * c)
+    As = -torch.exp(A_logs.to(torch.float)) # (k * c, d_state) [768, 16]
+    # print(As.shape) 
+    Bs = Bs.contiguous().to(torch.float) # [128, 4, 16, 4096]
+    # print(Bs.shape)
+    Cs = Cs.contiguous().to(torch.float) # [128, 4, 16, 4096]
+    # print(Cs.shape)
+    Ds = Ds.to(torch.float) # (K * c) [768]
+    # print(Ds.shape)
+    # raise NameError
     delta_bias = dt_projs_bias.view(-1).to(torch.float)
-     
+    
     def selective_scan(u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=True, nrows=1):
         return SelectiveScan.apply(u, delta, A, B, C, D, delta_bias, delta_softplus, nrows)
+    
+    # print(xs.shape, dts.shape, As.shape, Bs.shape, Cs.shape, Ds.shape)
+    # raise NameError
     
     ys: torch.Tensor = selective_scan(
         xs, dts, As, Bs, Cs, Ds, delta_bias, delta_softplus, nrows,
     ).view(B, K, -1, H, W)
     
-    y: torch.Tensor = CrossMerge.apply(ys)
+    #print(ys.shape) # torch.Size([1, 4, 192, 56, 56])
+    
+    #y: torch.Tensor = CrossMerge.apply(ys) # [1, 192, 3136]
+    
+    y: torch.Tensor = torch.sum(ys, 1).flatten(-2)[:,:,hilber2d_index_reverse_list[int(math.ceil(math.log2(H)))-3]] # [1, 192, 3136]
+    # print(y.shape)
+    
+    # raise NameError
     y = y.transpose(dim0=1, dim1=2).contiguous() # (B, L, C)
     y = out_norm(y).view(B, H, W, -1)
 
@@ -495,6 +542,9 @@ class SS2D(nn.Module):
 
     # only used to run previous version
     def forward_corev0(self, x: torch.Tensor, to_dtype=False, channel_first=False):
+        print("forward_corev0")
+        
+        
         def selective_scan(u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=True, nrows=1):
             return SelectiveScan.apply(u, delta, A, B, C, D, delta_bias, delta_softplus, nrows)
 
@@ -543,6 +593,8 @@ class SS2D(nn.Module):
     
     # only has speed difference with v0
     def forward_corev0_seq(self, x: torch.Tensor, to_dtype=False, channel_first=False):
+        print("forward_corev0_seq")
+        
         def selective_scan(u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=True, nrows=1):
             return SelectiveScan.apply(u, delta, A, B, C, D, delta_bias, delta_softplus, nrows)
 
@@ -607,6 +659,8 @@ class SS2D(nn.Module):
         ...
 
     def forward_corev2(self, x: torch.Tensor, nrows=-1, channel_first=False):
+        #print("forward_corev2")
+        
         nrows = 1
         if not channel_first:
             x = x.permute(0, 3, 1, 2).contiguous()
@@ -978,7 +1032,7 @@ class VSSM(nn.Module):
         x = self.classifier(x)
         return x
 
-    def flops(self, shape=(3, 224, 224)):
+    def flops(self, shape=(3, 256, 256)):
         # shape = self.__input_shape__[1:]
         supported_ops={
             "aten::silu": None, # as relu is in _IGNORED_OPS
@@ -1103,7 +1157,7 @@ def check_vssm_equals_vmambadp():
     oldvss = VMamba2Dp(depths=[2,2,6,2]).half().cuda()
     newvss = VSSM(depths=[2,2,6,2]).half().cuda()
     newvss.load_state_dict(oldvss.state_dict())
-    input = torch.randn((12, 3, 224, 224)).half().cuda()
+    input = torch.randn((12, 3, 256, 256)).half().cuda()
     torch.cuda.manual_seed(0)
     with torch.cuda.amp.autocast():
         y1 = oldvss.forward_backbone(input)
@@ -1195,7 +1249,7 @@ def check_vssm1_equals_vssm(forward_type="v0"):
     oldvss = VSSM0(depths=[2,2,6,2]).half().cuda()
     newvss = VSSM1(depths=[2,2,6,2]).half().cuda()
     newvss.load_state_dict(oldvss.state_dict())
-    input = torch.randn((12, 3, 224, 224)).half().cuda()
+    input = torch.randn((12, 3, 256, 256)).half().cuda()
     torch.manual_seed(0); torch.cuda.manual_seed(0)
     with torch.cuda.amp.autocast():
         y1 = oldvss.forward_backbone(input)
